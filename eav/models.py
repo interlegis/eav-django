@@ -17,10 +17,14 @@
 #
 #    You should have received a copy of the GNU Lesser General Public License
 #    along with EAV-Django.  If not, see <http://gnu.org/licenses/>.
+"""
+Models
+~~~~~~
+"""
 
 # django
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.contenttypes import generic
+from django.contrib.contenttypes import fields
 from django.db.models import (BooleanField, CharField, DateField, FloatField,
                               ForeignKey, IntegerField, Model, NullBooleanField,
                               TextField)
@@ -55,6 +59,7 @@ class BaseSchema(Model):
     TYPE_FLOAT   = 'float'
     TYPE_DATE    = 'date'
     TYPE_BOOLEAN = 'bool'
+    TYPE_ONE     = 'one'
     TYPE_MANY    = 'many'
     TYPE_RANGE   = 'range'
 
@@ -63,21 +68,22 @@ class BaseSchema(Model):
         (TYPE_FLOAT,   _('number')),
         (TYPE_DATE,    _('date')),
         (TYPE_BOOLEAN, _('boolean')),
+        (TYPE_ONE,     _('choice')),
         (TYPE_MANY,    _('multiple choices')),
         (TYPE_RANGE,   _('numeric range')),
     )
 
-    title    = CharField(_('title'), max_length=100, help_text=_('user-friendly attribute name'))
-    name     = AutoSlugField(_('name'), populate_from='title',
+    title    = CharField(_('title'), max_length=250, help_text=_('user-friendly attribute name'))
+    name     = AutoSlugField(_('name'), max_length=250, populate_from='title',
                              editable=True, blank=True, slugify=slugify_attr_name)
     help_text = CharField(_('help text'), max_length=250, blank=True,
                           help_text=_('short description for administrator'))
     datatype = CharField(_('data type'), max_length=5, choices=DATATYPE_CHOICES)
 
-    required = BooleanField(_('required'))
-    searched = BooleanField(_('include in search'))  # i.e. full-text search? mb for text only
-    filtered = BooleanField(_('include in filters'))
-    sortable = BooleanField(_('allow sorting'))
+    required = BooleanField(_('required'), default=False)
+    searched = BooleanField(_('include in search'), default=False)  # i.e. full-text search? mb for text only
+    filtered = BooleanField(_('include in filters'), default=False)
+    sortable = BooleanField(_('allow sorting'), default=False)
 
     class Meta:
         abstract = True
@@ -88,16 +94,9 @@ class BaseSchema(Model):
         return u'%s (%s)%s' % (self.title, self.get_datatype_display(),
                                 u' %s'%_('required') if self.required else '')
 
-    def get_choices(self, entity=None):
+    def get_choices(self):
         """
-        Returns a list of name/title tuples::
-
-            schema.get_choices()    # --> [("green", "Green color"), ("red", "Red color")]
-
-        Names are used for lookups, titles are displayed to user.
-
-        This method must be overloaded by subclasses of BaseSchema to enable
-        many-to-one schemata machinery.
+        Returns a queryset of choice objects bound to this schema.
         """
         return self.choices.all()
 
@@ -112,12 +111,13 @@ class BaseSchema(Model):
         """
         Saves given EAV attribute with given value for given entity.
 
-        If schema is not many-to-one, the value is saved to the corresponding
+        If schema is not a choice, the value is saved to the corresponding
         Attr instance (which is created or updated).
 
-        If schema is many-to-one, the value is processed thusly:
+        If schema is an cvhoice (one-to-one or many-to-one), the value is
+        processed thusly:
 
-        * if value is iterable, all Attr instances for corresponding managed m2m
+        * if value is iterable, all Attr instances for corresponding managed choice
           schemata are updated (those with names from the value list are set to
           True, others to False). If a list item is not in available choices,
           ValueError is raised;
@@ -126,8 +126,8 @@ class BaseSchema(Model):
           processed as above (i.e. "foo" --> ["foo"]).
         """
 
-        if self.datatype == self.TYPE_MANY:
-            self._save_m2m_attr(entity, value)
+        if self.datatype in (self.TYPE_ONE, self.TYPE_MANY):
+            self._save_choice_attr(entity, value)
         else:
             self._save_single_attr(entity, value)
 
@@ -156,20 +156,32 @@ class BaseSchema(Model):
                 setattr(attr, k, v)
             attr.save()
 
-    def _save_m2m_attr(self, entity, value):
+    def _save_choice_attr(self, entity, value):
+        """
+        Creates or updates BaseChoice(s) attribute(s) for given entity.
+        """
+
+        # value can be None to reset choices from schema
+        if value == None:
+            value = []
 
         if not hasattr(value, '__iter__'):
             value = [value]
 
+        if self.datatype == self.TYPE_ONE and len(value) > 1:
+            raise TypeError('Cannot assign multiple values "%s" to TYPE_ONE '
+                            'must be only one BaseChoice instance.'
+                            % value)
+
         if not all(isinstance(x, BaseChoice) for x in value):
             raise TypeError('Cannot assign "%s": "Attr.choice" '
                             'must be a BaseChoice instance.'
-                            % ', '.join(value))
+                            % value)
 
         # drop all attributes for this entity/schema pair
         self.get_attrs(entity).delete()
 
-        # Attr instances for corresponding managed m2m schemata are updated
+        # Attr instances for corresponding managed choice schemata are updated
         for choice in value:
             self._save_single_attr(
                 entity,
@@ -291,6 +303,9 @@ class BaseEntity(Model):
 
 
 class BaseChoice(Model):
+    """ Base class for choices.  Concrete choice class must overload the
+    `schema` attribute.
+    """
     title = CharField(max_length=100)
     schema = NotImplemented
 
@@ -303,9 +318,12 @@ class BaseChoice(Model):
 
 
 class BaseAttribute(Model):
+    """ Base class for choices.  Concrete choice class must overload the
+    `schema` and `choice` attributes.
+    """
     entity_type = ForeignKey(ContentType)
     entity_id = IntegerField()
-    entity = generic.GenericForeignKey(ct_field="entity_type", fk_field='entity_id')
+    entity = fields.GenericForeignKey(ct_field="entity_type", fk_field='entity_id')
 
     value_text = TextField(blank=True, null=True)
     value_float = FloatField(blank=True, null=True)
@@ -327,7 +345,7 @@ class BaseAttribute(Model):
         return u'%s: %s "%s"' % (self.entity, self.schema.title, self.value)
 
     def _get_value(self):
-        if self.schema.datatype == self.schema.TYPE_MANY:
+        if self.schema.datatype in (self.schema.TYPE_ONE, self.schema.TYPE_MANY):
             return self.choice
         if self.schema.datatype == self.schema.TYPE_RANGE:
             names = ('value_range_%s' % x for x in ('min', 'max'))

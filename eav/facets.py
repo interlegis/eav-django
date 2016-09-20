@@ -352,7 +352,7 @@ class BaseFacetSet(object):
         ...where `price` is a FloatField, and `colour` is the name of an EAV attribute
         represented by Schema and Attr models.
         """
-        fields   = self.get_queryset().model._meta.get_all_field_names()
+        fields   = [f.name for f in self.get_queryset().model._meta.get_fields()]
         schemata = self.sortable_names
         direction = '-' if self.data.get('order_desc') else ''
         if name in fields:

@@ -31,7 +31,7 @@ class BaseEntityManager(Manager):
     # TODO: refactor filter() and exclude()   -- see django.db.models.manager and ...query
 
     def exclude(self, *args, **kw):
-        qs = self.get_query_set().exclude(*args)
+        qs = self.get_queryset().exclude(*args)
         for lookup, value in kw.items():
             lookups = self._filter_by_lookup(qs, lookup, value)
             qs = qs.exclude(**lookups)
@@ -49,7 +49,7 @@ class BaseEntityManager(Manager):
         EAV attribute represented by Schema and Attr models.
         """
 
-        qs = self.get_query_set().filter(*args)
+        qs = self.get_queryset().filter(*args)
         for lookup, value in kw.items():
             lookups = self._filter_by_lookup(qs, lookup, value)
             qs = qs.filter(**lookups)
@@ -59,7 +59,7 @@ class BaseEntityManager(Manager):
 
         # TODO: refactor (make recursive resolving of sublookups)
 
-        fields   = self.model._meta.get_all_field_names()
+        fields   = [f.name for f in self.model._meta.get_fields()]
         schemata = dict((s.name, s) for s in self.model.get_schemata_for_model())
 
         if '__' in lookup:
@@ -201,6 +201,7 @@ class BaseEntityManager(Manager):
         """
 
         fields = self.model._meta.get_all_field_names()
+        fields = [f.name for f in self.model._meta.get_fields()]
         schemata = dict((s.name, s) for s in self.model.get_schemata_for_model())
 
         # check if all attributes are known

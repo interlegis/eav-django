@@ -40,7 +40,7 @@ class BaseSchemaForm(ModelForm):
     def clean_name(self):
         "Avoid name clashes between static and dynamic attributes."
         name = self.cleaned_data['name']
-        reserved_names = self._meta.model._meta.get_all_field_names()
+        reserved_names = [f.name for f in MyModel._meta.get_fields()]
         if name not in reserved_names:
             return name
         raise ValidationError(_('Attribute name must not clash with reserved names'
